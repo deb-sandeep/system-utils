@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screenshot Backups</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #e3e1dc; --accent: #2f6fdf; --code-bg: #f0efeb;
+    --ok: #2e9d57; --down: #d0453b; --warn: #c98a12; --unknown: #a1a1a6;
+    --ok-bg: #e8f5ec; --down-bg: #fbeceb; --warn-bg: #fbf3e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161617; --card: #212123; --text: #f2f2f4; --muted: #9a9aa0;
+      --line: #333336; --accent: #6ea2ff; --code-bg: #2b2b2e;
+      --ok: #4cc27a; --down: #ff6b60; --warn: #e8b04a; --unknown: #6e6e73;
+      --ok-bg: #1d3325; --down-bg: #3a2120; --warn-bg: #3a2f17;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  a { color: var(--accent); text-decoration: none; }
+  .back { font-size: 14px; }
+  h1 { font-size: 30px; margin: 8px 0 4px; letter-spacing: -0.02em; }
+  .sub { margin: 0; color: var(--muted); }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 36px 0 12px;
+  }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .hero { display: flex; gap: 16px; align-items: center; margin-top: 24px; border-width: 2px; }
+  .hero.ok { border-color: var(--ok); } .hero.failed, .hero.stale { border-color: var(--down); }
+  .hero.running { border-color: var(--warn); }
+  .big-dot { width: 18px; height: 18px; border-radius: 50%; flex: none; background: var(--unknown); }
+  .ok .big-dot { background: var(--ok); } .failed .big-dot, .stale .big-dot { background: var(--down); }
+  .running .big-dot { background: var(--warn); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .hero h3 { margin: 0; font-size: 21px; }
+  .hero p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-top: 12px; }
+  .stat .label { font-size: 13px; color: var(--muted); }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .stat .note { font-size: 13px; color: var(--muted); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.failed, .pill.incomplete { background: var(--down-bg); color: var(--down); }
+  .pill.running { background: var(--warn-bg); color: var(--warn); }
+  .muted { color: var(--muted); }
+  details { margin-top: 6px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+  pre {
+    margin: 6px 0 0; font: 12px/1.45 ui-monospace, Menlo, monospace; background: var(--code-bg);
+    padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  code { font: 13px ui-monospace, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; }
+  .help p { margin: 0 0 8px; font-size: 14px; }
+  footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 600px) { .hide-sm { display: none; } th, td { padding: 9px 10px; } }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">&larr; Mac Studio</a>
+  <h1>Screenshot backups</h1>
+  <p class="sub">sconsole's screenshots, pulled from the Raspberry Pi every hour and filed by month.</p>
+
+  <div id="hero" class="card hero">
+    <span class="big-dot"></span>
+    <div><h3 id="headline">Loading&hellip;</h3><p id="hero-detail"></p></div>
+  </div>
+
+  <div class="stats">
+    <div class="card stat"><div class="label">Latest screenshot</div><div class="value" id="s-latest">—</div><div class="note" id="s-latest-note"></div></div>
+    <div class="card stat"><div class="label">Backed up</div><div class="value" id="s-total">—</div><div class="note" id="s-total-note"></div></div>
+    <div class="card stat"><div class="label">Last 24 hours</div><div class="value" id="s-day">—</div><div class="note" id="s-day-note"></div></div>
+    <div class="card stat"><div class="label">Waiting in incoming/</div><div class="value" id="s-incoming">—</div><div class="note" id="s-incoming-note"></div></div>
+  </div>
+
+  <h2>Month folders &middot; <a href="gallery/index.html" target="_blank" rel="noopener">Browse all screenshots &nearr;</a></h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Month</th><th class="num">Screenshots</th><th class="num">Size</th></tr></thead>
+      <tbody id="months"></tbody>
+    </table>
+  </div>
+
+  <h2>History</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Started</th><th>Result</th><th class="num">Took</th>
+        <th class="hide-sm">Type</th><th class="num">Files</th><th class="num hide-sm">Size</th><th>Screenshots</th>
+      </tr></thead>
+      <tbody id="runs"></tbody>
+    </table>
+  </div>
+
+  <h2>For developers</h2>
+  <div class="card help">
+    <p>Each run lists the Pi's screenshots older than 2 minutes, copies them with rsync, checks every file's
+      SHA-256, files it into <code>YYYY-MM/</code>, and only then deletes it on the Pi.</p>
+    <p>Backup folder: <code>~/projects/workspace/sconsole/sconsole-screenshots/</code></p>
+    <p class="muted">Logs: <code>~/softwares/workspace/sconsole-scrshot-backup/logs/</code> &middot;
+      Run now: <code>sconsole-scrshot-backup</code> &middot; Options: <code>sconsole-scrshot-backup '/?'</code></p>
+  </div>
+
+  <footer id="footer"></footer>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const parse = s => s ? new Date(s.replace(' ', 'T')) : null;
+  // "2026-11-16 194500.png" -> Date
+  const shotDate = n => n ? parse(n.slice(0, 10) + ' ' + n.slice(11, 13) + ':' + n.slice(13, 15) + ':' + n.slice(15, 17)) : null;
+  const fmtDate = s => {
+    const d = typeof s === 'string' ? parse(s) : s; if (!d) return '—';
+    return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+  const fmtTime = d => d ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+  const ago = s => {
+    const d = typeof s === 'string' ? parse(s) : s; if (!d) return '';
+    const m = Math.round((Date.now() - d) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    const h = Math.round(m / 60); if (h < 36) return h + ' h ago';
+    return Math.round(h / 24) + ' days ago';
+  };
+  const dur = s => s == null ? '—' : s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  const bytes = b => {
+    if (b == null) return '—';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return (b >= 100 || i === 0 ? b.toFixed(0) : b.toFixed(1)) + ' ' + u[i];
+  };
+  const num = n => n == null ? '—' : n.toLocaleString();
+  const monthName = m => new Date(m + '-01T00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const RESULT = { ok: 'OK', failed: 'Failed', incomplete: 'Did not finish', running: 'Running' };
+
+  // Runs that were OK but found nothing are folded into one row per streak
+  function groupRuns(runs) {
+    const rows = [];
+    for (const r of runs) {
+      const quiet = r.result === 'ok' && !r.files;
+      const prev = rows[rows.length - 1];
+      if (quiet && prev && prev.quiet) { prev.count++; prev.oldest = r.start; continue; }
+      rows.push(quiet ? { quiet: true, count: 1, newest: r.start, oldest: r.start } : r);
+    }
+    return rows;
+  }
+
+  function runRow(r) {
+    if (r.quiet) {
+      const when = r.count === 1 ? fmtDate(r.newest) : fmtDate(r.oldest) + ' – ' + fmtTime(parse(r.newest));
+      return `<tr><td>${esc(when)}</td><td><span class="pill ok">OK</span></td><td class="num">—</td>
+        <td class="hide-sm muted">—</td><td class="num muted">0</td><td class="num hide-sm muted">—</td>
+        <td class="muted">No new screenshots${r.count > 1 ? ' (' + r.count + ' runs)' : ''}</td></tr>`;
+    }
+    const range = r.first ? fmtTime(shotDate(r.first)) + (r.files > 1 ? ' – ' + fmtTime(shotDate(r.last)) : '') : '';
+    const note = r.files && !r.remote_deleted && r.result !== 'running' ? ' <span class="muted">(kept on Pi)</span>' : '';
+    const errs = [];
+    if (r.errors.length) errs.push('Errors: ' + r.errors.join(', '));
+    errs.push(...r.details);
+    return `<tr>
+      <td>${esc(fmtDate(r.start))}</td>
+      <td><span class="pill ${r.result}">${RESULT[r.result] || esc(r.result)}</span></td>
+      <td class="num">${dur(r.duration_s)}</td>
+      <td class="hide-sm muted">${r.trigger === 'scheduled' ? 'Hourly' : 'Manual'}</td>
+      <td class="num">${num(r.files)}</td>
+      <td class="num hide-sm">${r.files ? bytes(r.bytes) : '—'}</td>
+      <td>${esc(range) || '<span class="muted">—</span>'}${note}${
+        errs.length ? `<details><summary>Show errors</summary><pre>${esc(errs.join('\n'))}</pre></details>` : ''}</td>
+    </tr>`;
+  }
+
+  function render(d) {
+    $('hero').className = 'card hero ' + d.overall;
+    $('headline').textContent = d.headline;
+    const lr = d.last_run;
+    let detail = '';
+    if (d.overall === 'running') detail = 'Started ' + fmtDate(d.runs[0]?.start) + '.';
+    else if (lr) {
+      detail = 'Last run ' + fmtDate(lr.end || lr.start) + ' (' + ago(lr.end || lr.start) + ')';
+      if (lr.result === 'failed') detail += ' — failed: ' + lr.errors.join(', ');
+      if (d.overall === 'stale') detail += '. Expected one every hour — check that the Mac and the Pi are on.';
+    }
+    detail += (detail ? ' · ' : '') + 'Next: about ' + fmtDate(d.next_scheduled) + '.';
+    $('hero-detail').textContent = detail;
+
+    const latest = shotDate(d.latest_screenshot);
+    $('s-latest').textContent = latest ? ago(latest) : '—';
+    $('s-latest-note').textContent = latest ? fmtDate(latest) : 'No screenshots yet';
+    $('s-total').textContent = num(d.total_files) + ' files';
+    $('s-total-note').textContent = bytes(d.total_bytes) + ' in ' + d.months.length + ' month folders';
+    const dayAgo = Date.now() - 864e5;
+    const day = d.runs.filter(r => parse(r.start) >= dayAgo);
+    $('s-day').textContent = num(day.reduce((n, r) => n + (r.files || 0), 0)) + ' files';
+    const dayFailed = day.filter(r => r.result === 'failed' || r.result === 'incomplete').length;
+    $('s-day-note').textContent = day.length + ' runs' + (dayFailed ? ', ' + dayFailed + ' with errors' : ', all OK');
+    $('s-incoming').textContent = num(d.incoming);
+    $('s-incoming-note').textContent = d.incoming ? 'Left by a failed check — see History' : 'Nothing stuck';
+
+    $('months').innerHTML = d.months.map(m => `<tr>
+      <td><a href="gallery/${encodeURIComponent(m.month)}/index.html" target="_blank" rel="noopener">${esc(monthName(m.month))}</a>
+        <span class="muted hide-sm">· ${esc(m.month)}/</span></td>
+      <td class="num">${num(m.files)}</td><td class="num">${bytes(m.bytes)}</td></tr>`).join('')
+      || '<tr><td colspan="3" class="muted">No month folders yet.</td></tr>';
+
+    $('runs').innerHTML = groupRuns(d.runs).map(runRow).join('')
+      || '<tr><td colspan="7" class="muted">No runs logged yet.</td></tr>';
+
+    $('footer').textContent = 'Updated ' + fmtDate(d.generated) + ' · refreshes every minute. Showing up to the last 90 days of logs.';
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('status.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      render(await r.json());
+    } catch (e) {
+      $('hero').className = 'card hero failed';
+      $('headline').textContent = 'Backup status unavailable';
+      $('hero-detail').textContent = 'Could not load status.json (' + e.message + ').';
+    }
+  }
+  load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

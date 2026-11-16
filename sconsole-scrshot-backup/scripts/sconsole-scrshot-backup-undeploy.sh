@@ -3,9 +3,11 @@
 # sconsole-scrshot-backup-undeploy.sh
 #
 # Purpose:
-#   Stops the launchd job, removes it from ~/Library/LaunchAgents, and
-#   removes the "sconsole-scrshot-backup" link from ~/softwares/bin/scripts/.
-#   The project, target/ and the backed-up screenshots are left alone.
+#   Stops the backup and status launchd jobs and removes them from
+#   ~/Library/LaunchAgents, removes the three links from ~/softwares/bin/scripts/,
+#   and removes the /screenshots/ page from the Caddy site. The project,
+#   target/, the logs, the backed-up screenshots and their browsing pages are
+#   left alone.
 #
 # Usage:
 #   sconsole-scrshot-backup-undeploy.sh
@@ -20,9 +22,10 @@
 set -euo pipefail
 
 NAME=sconsole-scrshot-backup
-LABEL="com.sandeep.$NAME"
-AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
-LINK="$HOME/softwares/bin/scripts/$NAME"
+LABELS=("com.sandeep.$NAME" "com.sandeep.$NAME-status")
+LINKS=("$HOME/softwares/bin/scripts/$NAME" "$HOME/softwares/bin/scripts/$NAME-status"
+       "$HOME/softwares/bin/scripts/$NAME-gallery")
+SITE_DIR="$HOME/softwares/workspace/caddy/site/screenshots"
 
 # -----------------------------------------------------------------------------
 # print_usage
@@ -51,29 +54,49 @@ parse_args() {
 
 # -----------------------------------------------------------------------------
 # remove_agent
-#   Purpose : Stop the job if it is loaded and delete its plist.
-#   Input   : globals LABEL, AGENT
-#   Output  : job unloaded; AGENT file removed
+#   Purpose : Stop a job if it is loaded and delete its plist.
+#   Input   : $1 - job label
+#   Output  : job unloaded; its LaunchAgents plist removed
 # -----------------------------------------------------------------------------
 remove_agent() {
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    rm -f "$AGENT"
+    launchctl bootout "gui/$(id -u)/$1" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/$1.plist"
 }
 
 # -----------------------------------------------------------------------------
 # remove_link
-#   Purpose : Delete the PATH link, if it is a symlink.
-#   Input   : globals LINK
-#   Output  : LINK removed; a real file at LINK is left alone
+#   Purpose : Delete a PATH link, if it is a symlink.
+#   Input   : $1 - link path
+#   Output  : link removed; a real file at that path is left alone
 # -----------------------------------------------------------------------------
 remove_link() {
-    if [[ -L $LINK ]]; then
-        rm -f "$LINK"
+    if [[ -L $1 ]]; then
+        rm -f "$1"
     fi
+}
+
+# -----------------------------------------------------------------------------
+# remove_page
+#   Purpose : Delete the status page, its JSON and the gallery link from the
+#             Caddy site (the linked backup folder itself is untouched).
+#   Input   : globals SITE_DIR
+#   Output  : SITE_DIR removed
+# -----------------------------------------------------------------------------
+remove_page() {
+    if [[ -L $SITE_DIR/gallery ]]; then
+        rm -f "$SITE_DIR/gallery"
+    fi
+    rm -f "$SITE_DIR/index.html" "$SITE_DIR/status.json" "$SITE_DIR/status.json.tmp"
+    rmdir "$SITE_DIR" 2>/dev/null || true
 }
 
 # --- main ---
 parse_args "$@"
-remove_agent
-remove_link
-echo "Undeployed $LABEL"
+for label in "${LABELS[@]}"; do
+    remove_agent "$label"
+done
+for link in "${LINKS[@]}"; do
+    remove_link "$link"
+done
+remove_page
+echo "Undeployed $NAME"

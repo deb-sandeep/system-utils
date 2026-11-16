@@ -15,7 +15,8 @@ Home for projects that automate local system needs on this Mac (macOS, zsh). Eac
 ├── src/main/
 │   ├── java/              # Java sources
 │   ├── python/            # Python sources
-│   └── dbscripts/         # SQL / database scripts
+│   ├── dbscripts/         # SQL / database scripts
+│   └── web/               # static status pages, copied into the Caddy site on deploy
 └── target/                # build output (binaries); generated, never edited by hand
 ```
 
@@ -41,3 +42,12 @@ Every script (bash, `#!/bin/bash`; keep to bash 3.2 so macOS `/bin/bash` and lau
    ```
 3. **`print_usage()`**: prints the header's usage text. It runs on `/?` (also `-h`, `--help`), and on bad arguments with exit code 2. In zsh, quote it: `script.sh '/?'`.
 4. **Main**: the driving logic comes last, after a `# --- main ---` line, and only calls functions.
+
+Python scripts (`#!/usr/bin/python3`, Apple's 3.9, standard library only) follow the same four rules: the same `# ====` header block, the same function comment blocks, a `print_usage()` that prints the header on `/?`, `-h` or `--help`, and the driving logic under `# --- main ---` inside `if __name__ == "__main__":`.
+
+## Publishing job status (Caddy)
+
+Until syshub replaces it, Caddy (`~/softwares/logncfgs/caddy/Caddyfile`, LaunchAgent `local.caddy`) serves `~/softwares/workspace/caddy/site/` as plain files. A scheduled job publishes its status the way db-backup does (see `sconsole-scrshot-backup` for a full example):
+- **Workspace:** the job uses `~/softwares/workspace/<project>/` for `logs/YYYY-MM-DD.log`, a `status` file and `work/.lock`. Each run is logged between `=== <project> start` and `=== <project> OK` / `=== <project> FINISHED WITH ERRORS: ...` lines.
+- **Status builder:** a `<project>-status` script with its own LaunchAgent (WatchPaths on `status` and `work/`, plus a timer). It parses the logs into `site/<page>/status.json`, written atomically.
+- **Page:** `src/main/web/index.html` is copied to `site/<page>/` on deploy, and a card on `site/index.html` links to it.

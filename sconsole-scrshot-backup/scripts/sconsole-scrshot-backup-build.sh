@@ -4,9 +4,12 @@
 #
 # Purpose:
 #   Checks the project's scripts for syntax errors (and with shellcheck, when
-#   installed), then rebuilds target/ with the launchd job definition. The job
-#   runs the backup through its link in ~/softwares/bin/scripts/, which the
-#   deploy script creates.
+#   installed), then rebuilds target/ with the two launchd job definitions:
+#     com.sandeep.sconsole-scrshot-backup         - the backup, every interval
+#     com.sandeep.sconsole-scrshot-backup-status  - rebuilds the web status
+#       JSON when the backup's status file or lock changes, and every 15 min
+#   Both jobs run their script through its link in ~/softwares/bin/scripts/,
+#   which the deploy script creates.
 #
 # Usage:
 #   sconsole-scrshot-backup-build.sh [options]
@@ -24,10 +27,13 @@ set -euo pipefail
 
 NAME=sconsole-scrshot-backup
 LABEL="com.sandeep.$NAME"
+STATUS_LABEL="com.sandeep.$NAME-status"
 INTERVAL_SEC=3600
+STATUS_INTERVAL_SEC=900
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="$PROJECT_DIR/target"
-LINK="$HOME/softwares/bin/scripts/$NAME"
+BIN="$HOME/softwares/bin/scripts"
+WS="$HOME/softwares/workspace/$NAME"
 
 # -----------------------------------------------------------------------------
 # print_usage
@@ -63,7 +69,8 @@ parse_args() {
 
 # -----------------------------------------------------------------------------
 # check_scripts
-#   Purpose : Syntax-check every script in scripts/, plus shellcheck if present.
+#   Purpose : Syntax-check every shell script in scripts/ (plus shellcheck if
+#             present) and every Python file in src/main/python/.
 #   Input   : globals PROJECT_DIR
 #   Output  : errors on stderr; returns non-zero on the first failure
 # -----------------------------------------------------------------------------
@@ -75,15 +82,18 @@ check_scripts() {
     if command -v shellcheck >/dev/null; then
         shellcheck "$PROJECT_DIR"/scripts/*.sh
     fi
+    for script in "$PROJECT_DIR"/src/main/python/*.py; do
+        /usr/bin/python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$script"
+    done
 }
 
 # -----------------------------------------------------------------------------
-# write_plist
-#   Purpose : Write and validate the launchd job definition.
-#   Input   : $1 - output path; globals LABEL, NAME, LINK, INTERVAL_SEC
-#   Output  : the plist file; returns non-zero if plutil rejects it
+# write_backup_plist
+#   Purpose : Write the launchd job that runs the backup every INTERVAL_SEC.
+#   Input   : $1 - output path; globals LABEL, NAME, BIN, WS, INTERVAL_SEC
+#   Output  : the plist file
 # -----------------------------------------------------------------------------
-write_plist() {
+write_backup_plist() {
     cat > "$1" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -94,25 +104,70 @@ write_plist() {
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$LINK</string>
+        <string>$BIN/$NAME</string>
     </array>
     <key>StartInterval</key>
     <integer>$INTERVAL_SEC</integer>
     <key>RunAtLoad</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>$HOME/Library/Logs/$NAME.log</string>
+    <string>$WS/logs/launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>$HOME/Library/Logs/$NAME.log</string>
+    <string>$WS/logs/launchd.log</string>
 </dict>
 </plist>
 EOF
-    plutil -lint "$1" >/dev/null
+}
+
+# -----------------------------------------------------------------------------
+# write_status_plist
+#   Purpose : Write the launchd job that rebuilds the web status JSON when the
+#             backup's status file or work/ folder (its lock) changes, and
+#             every STATUS_INTERVAL_SEC.
+#   Input   : $1 - output path; globals STATUS_LABEL, NAME, BIN, WS,
+#             STATUS_INTERVAL_SEC
+#   Output  : the plist file
+# -----------------------------------------------------------------------------
+write_status_plist() {
+    cat > "$1" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$STATUS_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>$BIN/$NAME-status</string>
+    </array>
+    <key>WatchPaths</key>
+    <array>
+        <string>$WS/status</string>
+        <string>$WS/work</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>$STATUS_INTERVAL_SEC</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>$WS/logs/status.out</string>
+    <key>StandardErrorPath</key>
+    <string>$WS/logs/status.out</string>
+</dict>
+</plist>
+EOF
 }
 
 # --- main ---
@@ -120,5 +175,7 @@ parse_args "$@"
 check_scripts
 rm -rf "$TARGET"
 mkdir -p "$TARGET"
-write_plist "$TARGET/$LABEL.plist"
-echo "Built $TARGET (runs every ${INTERVAL_SEC}s)"
+write_backup_plist "$TARGET/$LABEL.plist"
+write_status_plist "$TARGET/$STATUS_LABEL.plist"
+plutil -lint "$TARGET"/*.plist >/dev/null
+echo "Built $TARGET (backup every ${INTERVAL_SEC}s, status every ${STATUS_INTERVAL_SEC}s and on change)"

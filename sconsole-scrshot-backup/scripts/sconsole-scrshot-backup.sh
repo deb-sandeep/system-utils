@@ -8,6 +8,15 @@
 #   <local-dir>/incoming/, checked against the remote SHA-256, filed into its
 #   month folder, and only then deleted on the remote.
 #
+#   Each run is logged to ~/softwares/workspace/sconsole-scrshot-backup/logs/
+#   YYYY-MM-DD.log between "=== sconsole-scrshot-backup start" and
+#   "=== sconsole-scrshot-backup OK|FINISHED WITH ERRORS" lines, and the result
+#   is written to the workspace's status file. sconsole-scrshot-backup-status
+#   turns these into the web status page. Every run ends by running
+#   sconsole-scrshot-backup-gallery, which brings the browsing pages
+#   (<local-dir>/index.html and the month/week pages) up to date; it only
+#   rewrites pages whose screenshots changed.
+#
 # Usage:
 #   sconsole-scrshot-backup.sh [options]
 #
@@ -24,16 +33,32 @@
 #
 # Exit codes:
 #   0  success, or nothing to back up, or another run is in progress
-#   1  some files failed checks (they stay on the remote)
+#   1  the run finished with errors (failed files stay on the remote)
 #   2  bad arguments
 # =============================================================================
 set -euo pipefail
 
+NAME=sconsole-scrshot-backup
+LABEL="com.sandeep.$NAME"
 REMOTE_HOST=sconsole
 REMOTE_DIR=projects/workspace/sconsole/screenshots
 LOCAL_DIR="$HOME/projects/workspace/sconsole/sconsole-screenshots"
 MIN_AGE_MIN=2
 KEEP_REMOTE=0
+
+WS="$HOME/softwares/workspace/$NAME"
+LOG_DIR="$WS/logs"
+WORK="$WS/work"
+STATUS="$WS/status"
+LOCK="$WORK/.lock"
+LOG_KEEP_DAYS=90
+GALLERY="$HOME/softwares/bin/scripts/$NAME-gallery"
+
+STARTED=0        # set once the start marker is logged
+FINISHED=0       # set once the end marker is logged
+ERRORS=()        # run-level problems, for the end marker
+FILED=()         # names safely in their month folder
+FILED_BYTES=0
 
 # -----------------------------------------------------------------------------
 # print_usage
@@ -83,8 +108,36 @@ parse_args() {
 }
 
 # -----------------------------------------------------------------------------
+# init_logging
+#   Purpose : Send all further output (including ssh/rsync errors) to today's
+#             log file as well as stdout, and delete logs past LOG_KEEP_DAYS.
+#   Input   : globals LOG_DIR, WORK, LOG_KEEP_DAYS
+#   Output  : creates LOG_DIR and WORK; redirects stdout and stderr
+# -----------------------------------------------------------------------------
+init_logging() {
+    mkdir -p "$LOG_DIR" "$WORK"
+    exec > >(tee -a "$LOG_DIR/$(date +%F).log") 2>&1
+    find "$LOG_DIR" -name '????-??-??.log' -mtime +"$LOG_KEEP_DAYS" -delete
+}
+
+# -----------------------------------------------------------------------------
+# trigger
+#   Purpose : Tell a scheduled run from a manual one.
+#   Input   : env XPC_SERVICE_NAME (set by launchd to the job label)
+#   Output  : stdout - "scheduled" or "manual"
+# -----------------------------------------------------------------------------
+trigger() {
+    if [[ ${XPC_SERVICE_NAME:-} == "$LABEL" ]]; then
+        echo scheduled
+    else
+        echo manual
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # acquire_lock
-#   Purpose : Make sure only one backup runs at a time.
+#   Purpose : Make sure only one backup runs at a time. The status page also
+#             reads the lock to show a run in progress.
 #   Input   : globals LOCK
 #   Output  : creates the LOCK folder; returns 1 if another run holds it
 # -----------------------------------------------------------------------------
@@ -93,13 +146,43 @@ acquire_lock() {
 }
 
 # -----------------------------------------------------------------------------
+# finish
+#   Purpose : Bring the browsing pages up to date, then log the end marker,
+#             write the status file and exit.
+#   Input   : globals ERRORS, FILED, NAME, STATUS
+#   Output  : gallery refreshed; end marker logged; STATUS rewritten; exits
+#             0 (OK) or 1 (errors)
+# -----------------------------------------------------------------------------
+finish() {
+    FINISHED=1
+    if ! update_gallery; then
+        ERRORS+=("gallery")
+    fi
+    if (( ${#ERRORS[@]} )); then
+        log "=== $NAME FINISHED WITH ERRORS: ${ERRORS[*]}"
+        printf '%s FAILED %s\n' "$(date '+%F %T')" "${ERRORS[*]}" > "$STATUS"
+        exit 1
+    fi
+    log "=== $NAME OK: ${#FILED[@]} file(s)"
+    printf '%s OK %s\n' "$(date '+%F %T')" "${#FILED[@]}" > "$STATUS"
+    exit 0
+}
+
+# -----------------------------------------------------------------------------
 # cleanup
-#   Purpose : Remove temp files and release the lock (EXIT trap).
-#   Input   : globals MANIFEST, NAMES, LOCK
+#   Purpose : EXIT trap. Logs an end marker if the run stopped unexpectedly,
+#             then removes temp files and releases the lock.
+#   Input   : $? of the exiting script; globals STARTED, FINISHED, MANIFEST,
+#             NAMES, LOCK
 #   Output  : none
 # -----------------------------------------------------------------------------
 cleanup() {
-    rm -f "$MANIFEST" "$NAMES"
+    local rc=$?
+    if (( STARTED && ! FINISHED )); then
+        ERRORS+=("aborted(exit-$rc)")
+        ( finish ) || true
+    fi
+    rm -f "${MANIFEST-}" "${NAMES-}"
     rmdir "$LOCK" 2>/dev/null || true
 }
 
@@ -110,10 +193,11 @@ cleanup() {
 #   Input   : globals REMOTE_HOST, REMOTE_DIR, MIN_AGE_MIN
 #   Output  : $1 - file written with "<sha256>  <name>" lines, sorted by name
 #             $2 - file written with just the names, one per line
+#             returns non-zero if the remote could not be listed
 # -----------------------------------------------------------------------------
 fetch_manifest() {
     local manifest="$1" names="$2"
-    ssh "$REMOTE_HOST" "cd -- '$REMOTE_DIR' && find . -maxdepth 1 -type f -name '*.png' -mmin +$MIN_AGE_MIN -printf '%f\0' | sort -z | xargs -0 -r sha256sum" > "$manifest"
+    ssh "$REMOTE_HOST" "cd -- '$REMOTE_DIR' && find . -maxdepth 1 -type f -name '*.png' -mmin +$MIN_AGE_MIN -printf '%f\0' | sort -z | xargs -0 -r sha256sum" > "$manifest" || return 1
     cut -c67- "$manifest" > "$names"
 }
 
@@ -134,8 +218,9 @@ pull_files() {
 #             into its month folder.
 #   Input   : $1 - expected SHA-256; $2 - file name ("YYYY-MM-DD HHMMSS.png");
 #             globals STAGING, LOCAL_DIR
-#   Output  : file moved to LOCAL_DIR/YYYY-MM/; returns 0 when the file is
-#             safely in place (so the remote copy may go), 1 otherwise
+#   Output  : file moved to LOCAL_DIR/YYYY-MM/; adds its size to FILED_BYTES;
+#             returns 0 when the file is safely in place (so the remote copy
+#             may go), 1 otherwise (with a "FAILED <name>: ..." log line)
 # -----------------------------------------------------------------------------
 file_screenshot() {
     local hash="$1" name="$2"
@@ -143,23 +228,24 @@ file_screenshot() {
     local dest="$LOCAL_DIR/$month/$name"
 
     if [[ ! -f $src ]]; then
-        log "missing after transfer: $name"; return 1
+        log "FAILED $name: missing after transfer"; return 1
     fi
     if [[ $(shasum -a 256 "$src" | cut -c1-64) != "$hash" ]]; then
-        log "checksum mismatch, discarded: $name"; rm -f "$src"; return 1
+        log "FAILED $name: checksum mismatch, discarded"; rm -f "$src"; return 1
     fi
     if [[ ! $month =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
-        log "unexpected name, left in incoming: $name"; return 1
+        log "FAILED $name: unexpected name, left in incoming"; return 1
     fi
     mkdir -p "$LOCAL_DIR/$month"
     if [[ -e $dest ]]; then
         if ! cmp -s "$src" "$dest"; then
-            log "different file already at $dest, left in incoming"; return 1
+            log "FAILED $name: a different file is already in $month, left in incoming"; return 1
         fi
         rm -f "$src"
     else
         mv -n "$src" "$dest"
     fi
+    FILED_BYTES=$(( FILED_BYTES + $(stat -f %z "$dest") ))
 }
 
 # -----------------------------------------------------------------------------
@@ -172,11 +258,28 @@ delete_remote() {
     printf '%s\0' "$@" | ssh "$REMOTE_HOST" "cd -- '$REMOTE_DIR' && xargs -0 -r rm -f --"
 }
 
+# -----------------------------------------------------------------------------
+# update_gallery
+#   Purpose : Refresh the browsing pages in the backup folder.
+#   Input   : globals GALLERY, LOCAL_DIR
+#   Output  : pages rewritten by the gallery script; its summary logged;
+#             returns non-zero (with a "FAILED: ..." log line) if it failed
+# -----------------------------------------------------------------------------
+update_gallery() {
+    local out
+    if out="$(/usr/bin/python3 "$GALLERY" --local-dir "$LOCAL_DIR" 2>&1)"; then
+        log "$out"
+    else
+        log "FAILED: gallery update: $(printf '%s' "$out" | tail -1)"
+        return 1
+    fi
+}
+
 # --- main ---
 parse_args "$@"
+init_logging
 
 STAGING="$LOCAL_DIR/incoming"
-LOCK="$LOCAL_DIR/.backup.lock"
 mkdir -p "$STAGING"
 if ! acquire_lock; then
     log "another run holds $LOCK; exiting"
@@ -186,32 +289,45 @@ MANIFEST="$(mktemp)"
 NAMES="$(mktemp)"
 trap cleanup EXIT
 
-fetch_manifest "$MANIFEST" "$NAMES"
-if [[ ! -s $MANIFEST ]]; then
-    log "nothing to back up"
-    exit 0
-fi
-log "pulling $(wc -l < "$NAMES" | tr -d ' ') file(s) from $REMOTE_HOST"
-pull_files "$NAMES"
+log "=== $NAME start ($(trigger))"
+STARTED=1
 
-status=0
-filed=()
+if ! fetch_manifest "$MANIFEST" "$NAMES"; then
+    log "FAILED: could not list files on $REMOTE_HOST"
+    ERRORS+=("unreachable:$REMOTE_HOST")
+    finish
+fi
+if [[ ! -s $MANIFEST ]]; then
+    log "no new screenshots on $REMOTE_HOST"
+    finish
+fi
+log "found $(wc -l < "$NAMES" | tr -d ' ') file(s) on $REMOTE_HOST"
+if ! pull_files "$NAMES"; then
+    log "FAILED: rsync exited non-zero"
+    ERRORS+=("transfer")
+fi
+
+failed_files=0
 while IFS= read -r line; do
     if file_screenshot "${line:0:64}" "${line:66}"; then
-        filed+=("${line:66}")
+        FILED+=("${line:66}")
     else
-        status=1
+        failed_files=$(( failed_files + 1 ))
     fi
 done < "$MANIFEST"
+if (( failed_files )); then
+    ERRORS+=("files:$failed_files")
+fi
 
-if (( ${#filed[@]} == 0 )); then
-    log "no files backed up"
-    exit 1
+if (( ${#FILED[@]} )); then
+    log "backed up ${#FILED[@]} file(s) ($FILED_BYTES bytes): ${FILED[0]} .. ${FILED[${#FILED[@]}-1]}"
+    if (( KEEP_REMOTE )); then
+        log "kept on $REMOTE_HOST (--keep-remote)"
+    elif delete_remote "${FILED[@]}"; then
+        log "deleted ${#FILED[@]} file(s) from $REMOTE_HOST"
+    else
+        log "FAILED: could not delete backed-up files on $REMOTE_HOST"
+        ERRORS+=("remote-delete")
+    fi
 fi
-if (( KEEP_REMOTE )); then
-    log "backed up ${#filed[@]} file(s); --keep-remote, remote left as is"
-else
-    delete_remote "${filed[@]}"
-    log "backed up ${#filed[@]} file(s) and deleted them from $REMOTE_HOST"
-fi
-exit $status
+finish
