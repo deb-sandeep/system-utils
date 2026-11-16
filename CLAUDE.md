@@ -23,6 +23,7 @@ Home for projects that automate local system needs on this Mac (macOS, zsh). Eac
 - Only create the `src/main/*` folders a project actually uses. A shell-only project may have just `readme.md` and `scripts/`.
 - Every new project starts with a `readme.md` and `scripts/<project>-build.sh` (and `-deploy.sh` if it gets installed anywhere).
 - **Deploying scripts**: `<project>-deploy.sh` puts a symlink to each user-facing script in `~/softwares/bin/scripts/` (on PATH via `~/.zshrc`). The link is named without `.sh` (e.g. `sconsole-scrshot-backup` → `<project>/scripts/sconsole-scrshot-backup.sh`). Anything scheduled (launchd) runs the script through that link. `-undeploy.sh` removes the link.
+- **launchd jobs** are labelled `com.sandeep.<project>[-<part>]`; `<project>-build.sh` writes their plists to `target/` and `-deploy.sh` installs them. Use a LaunchAgent unless the job runs Homebrew binaries that reach other LAN machines: macOS Local Network privacy blocks those from user agents, so such a job is a root LaunchDaemon (see `db-backup`), and its deploy/undeploy use `sudo` and must be run from a terminal.
 - Ops scripts should be safe to run more than once, and should work from any folder (resolve paths relative to the script, not the caller).
 - Keep secrets out of the project folders.
 
@@ -47,7 +48,7 @@ Python scripts (`#!/usr/bin/python3`, Apple's 3.9, standard library only) follow
 
 ## Publishing job status (Caddy)
 
-Until syshub replaces it, Caddy (`~/softwares/logncfgs/caddy/Caddyfile`, LaunchAgent `local.caddy`) serves `~/softwares/workspace/caddy/site/` as plain files. A scheduled job publishes its status the way db-backup does (see `sconsole-scrshot-backup` for a full example):
+Until syshub replaces it, Caddy (`~/softwares/logncfgs/caddy/Caddyfile`, LaunchAgent `local.caddy`) serves `~/softwares/workspace/caddy/site/` as plain files. A scheduled job publishes its status this way (see `db-backup` and `sconsole-scrshot-backup` for full examples):
 - **Workspace:** the job uses `~/softwares/workspace/<project>/` for `logs/YYYY-MM-DD.log`, a `status` file and `work/.lock`. Each run is logged between `=== <project> start` and `=== <project> OK` / `=== <project> FINISHED WITH ERRORS: ...` lines.
 - **Status builder:** a `<project>-status` script with its own LaunchAgent (WatchPaths on `status` and `work/`, plus a timer). It parses the logs into `site/<page>/status.json`, written atomically.
 - **Page:** `src/main/web/index.html` is copied to `site/<page>/` on deploy, and a card on `site/index.html` links to it.

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Database Backups</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #e3e1dc; --accent: #2f6fdf; --code-bg: #f0efeb;
+    --ok: #2e9d57; --down: #d0453b; --warn: #c98a12; --unknown: #a1a1a6;
+    --ok-bg: #e8f5ec; --down-bg: #fbeceb; --warn-bg: #fbf3e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161617; --card: #212123; --text: #f2f2f4; --muted: #9a9aa0;
+      --line: #333336; --accent: #6ea2ff; --code-bg: #2b2b2e;
+      --ok: #4cc27a; --down: #ff6b60; --warn: #e8b04a; --unknown: #6e6e73;
+      --ok-bg: #1d3325; --down-bg: #3a2120; --warn-bg: #3a2f17;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  a { color: var(--accent); text-decoration: none; }
+  .back { font-size: 14px; }
+  h1 { font-size: 30px; margin: 8px 0 4px; letter-spacing: -0.02em; }
+  .sub { margin: 0; color: var(--muted); }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 36px 0 12px;
+  }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .hero { display: flex; gap: 16px; align-items: center; margin-top: 24px; border-width: 2px; }
+  .hero.ok { border-color: var(--ok); } .hero.failed, .hero.stale { border-color: var(--down); }
+  .hero.running { border-color: var(--warn); }
+  .big-dot { width: 18px; height: 18px; border-radius: 50%; flex: none; background: var(--unknown); }
+  .ok .big-dot { background: var(--ok); } .failed .big-dot, .stale .big-dot { background: var(--down); }
+  .running .big-dot { background: var(--warn); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .hero h3 { margin: 0; font-size: 21px; }
+  .hero p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .stat .label { font-size: 13px; color: var(--muted); }
+  .stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .stat .note { font-size: 13px; color: var(--muted); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.failed, .pill.incomplete { background: var(--down-bg); color: var(--down); }
+  .pill.running { background: var(--warn-bg); color: var(--warn); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 12px; padding: 1px 8px; border-radius: 6px; background: var(--code-bg);
+    white-space: nowrap;
+  }
+  .chip.failed { background: var(--down-bg); color: var(--down); }
+  .muted { color: var(--muted); }
+  details { margin-top: 6px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+  pre {
+    margin: 6px 0 0; font: 12px/1.45 ui-monospace, Menlo, monospace; background: var(--code-bg);
+    padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  code { font: 13px ui-monospace, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; }
+  .help p { margin: 0 0 8px; font-size: 14px; }
+  footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
+  .error { color: var(--down); }
+  @media (max-width: 600px) { .hide-sm { display: none; } th, td { padding: 9px 10px; } }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">&larr; Mac Studio</a>
+  <h1>Database backups</h1>
+  <p class="sub">Nightly copies of the live databases, taken at 2:00 AM.</p>
+
+  <div id="hero" class="card hero">
+    <span class="big-dot"></span>
+    <div><h3 id="headline">Loading&hellip;</h3><p id="hero-detail"></p></div>
+  </div>
+
+  <h2>Restore points per database</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Database</th><th>Server</th><th class="num">Last dump</th>
+        <th class="num">Restore points</th><th class="hide-sm">Oldest</th><th>Latest</th>
+      </tr></thead>
+      <tbody id="dbs"></tbody>
+    </table>
+  </div>
+  <p id="snap-note" class="muted" style="font-size:13px;margin:8px 2px 0"></p>
+
+  <h2>History</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Started</th><th>Result</th><th class="num">Took</th>
+        <th class="hide-sm">Type</th><th>Databases</th>
+      </tr></thead>
+      <tbody id="runs"></tbody>
+    </table>
+  </div>
+
+  <h2>For developers</h2>
+  <div class="card help">
+    <p>Every night, each database is dumped, stored in a restic repository on the Studio, and loaded
+      into the Studio's MariaDB as a ready-to-query copy (<code>mysql -h mac-studio.local -u root -p</code>).</p>
+    <p>Restore an older copy (on the Studio):
+      <code>restic -r ~/softwares/workspace/db-backup/restic-repo snapshots --tag &lt;db&gt;</code>, then
+      <code>restic … dump &lt;snapshot-id&gt; /mariadb/&lt;db&gt;.sql &gt; &lt;db&gt;.sql</code>.</p>
+    <p class="muted">Logs: <code>~/softwares/workspace/db-backup/logs/</code> &middot; Run now: <code>sudo launchctl kickstart system/com.sandeep.db-backup</code></p>
+  </div>
+
+  <footer id="footer"></footer>
+</main>
+<script>
+  const SERVERS = { capitalyst: '192.168.0.116', jove_notes: '192.168.0.123', sconsolenxt: '192.168.0.161' };
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const parse = s => s ? new Date(s.replace(' ', 'T')) : null;
+  const fmtDate = s => {
+    const d = parse(s); if (!d) return '—';
+    return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+  const ago = s => {
+    const d = parse(s); if (!d) return '';
+    const m = Math.round((Date.now() - d) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    const h = Math.round(m / 60); if (h < 36) return h + ' h ago';
+    return Math.round(h / 24) + ' days ago';
+  };
+  const dur = s => s == null ? '—' : s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  const bytes = b => {
+    if (b == null) return '—';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return (b >= 100 || i === 0 ? b.toFixed(0) : b.toFixed(1)) + ' ' + u[i];
+  };
+  const RESULT = { ok: 'OK', failed: 'Failed', incomplete: 'Did not finish', running: 'Running' };
+
+  function render(d) {
+    const hero = $('hero');
+    hero.className = 'card hero ' + d.overall;
+    $('headline').textContent = d.headline;
+    const lr = d.last_run;
+    let detail = '';
+    if (d.overall === 'running') detail = 'Started ' + fmtDate(d.runs[0]?.start) + '.';
+    else if (lr) {
+      detail = 'Last run ' + fmtDate(lr.end || lr.start) + ' (' + ago(lr.end || lr.start) + ')';
+      if (lr.result === 'failed') detail += ' — failed: ' + lr.failures.join(', ');
+      if (d.overall === 'stale') detail += '. Expected one every night — check that the Studio was on at 2 AM.';
+    }
+    detail += (detail ? ' · ' : '') + 'Next: ' + fmtDate(d.next_scheduled) + '.';
+    $('hero-detail').textContent = detail;
+
+    // Per-database table: restic restore points + size of the latest dump
+    const sizes = {};
+    (lr?.items || []).forEach(i => sizes[i.db] = i);
+    const snaps = d.snapshots || [];
+    $('dbs').innerHTML = snaps.length ? snaps.map(s => {
+      const item = sizes[s.db];
+      const server = item ? item.source : s.db;
+      const fresh = (Date.now() - parse(s.latest)) < d.stale_hours * 3600e3;
+      return `<tr>
+        <td><strong>${esc(s.db)}</strong></td>
+        <td class="muted">${esc(server)}${SERVERS[server] ? ' <span class="hide-sm">· ' + SERVERS[server] + '</span>' : ''}</td>
+        <td class="num">${bytes(s.latest_bytes)}</td>
+        <td class="num">${s.count}</td>
+        <td class="hide-sm muted">${fmtDate(s.oldest)}</td>
+        <td><span class="pill ${fresh ? 'ok' : 'failed'}">${esc(ago(s.latest))}</span></td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="6" class="${d.snapshot_error ? 'error' : 'muted'}">${
+      d.snapshot_error ? 'Could not read the backup repository: ' + esc(d.snapshot_error) : 'No restore points yet.'}</td></tr>`;
+    $('snap-note').textContent = 'Kept: ' + d.retention + ' · Repository size on disk: ' + bytes(d.repo_bytes) +
+      ' (compressed and de-duplicated).';
+
+    // History
+    $('runs').innerHTML = d.runs.map(r => {
+      const chips = r.items.map(i => {
+        const t = i.status === 'ok' ? `${i.db} · ${i.size || ''}` : `${i.db} · ${i.status}`;
+        return `<span class="chip ${i.status === 'failed' ? 'failed' : ''}" title="${esc(i.error || (i.total_s != null ? 'dump ' + i.dump_s + 's, total ' + i.total_s + 's' : ''))}">${esc(t)}</span>`;
+      }).join('');
+      const errs = r.items.filter(i => i.status === 'failed' || i.details)
+        .map(i => `${i.db}: ${i.error || ''}${i.details ? '\n  ' + i.details.join('\n  ') : ''}`);
+      if (r.details) errs.push(...r.details);
+      if (r.failures.some(f => f === 'retention' || f === 'restic-check')) errs.push('Also failed: ' + r.failures.filter(f => !f.includes('/')).join(', '));
+      return `<tr>
+        <td>${esc(fmtDate(r.start))}</td>
+        <td><span class="pill ${r.result}">${RESULT[r.result] || esc(r.result)}</span></td>
+        <td class="num">${dur(r.duration_s)}</td>
+        <td class="hide-sm muted">${r.trigger === 'nightly' ? 'Nightly' : 'Manual'}</td>
+        <td><div class="chips">${chips || '<span class="muted">—</span>'}</div>${
+          errs.length ? `<details><summary>Show errors</summary><pre>${esc(errs.join('\n'))}</pre></details>` : ''}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" class="muted">No runs logged yet.</td></tr>';
+
+    $('footer').textContent = 'Updated ' + fmtDate(d.generated) + ' · refreshes every minute. Showing the last 90 days of logs.';
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('status.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      render(await r.json());
+    } catch (e) {
+      $('hero').className = 'card hero failed';
+      $('headline').textContent = 'Backup status unavailable';
+      $('hero-detail').textContent = 'Could not load status.json (' + e.message + ').';
+    }
+  }
+  load(); setInterval(load, 60000);
+</script>
+</body>
+</html>
