@@ -47,6 +47,7 @@ TS = "%Y-%m-%d %H:%M:%S"
 LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (.*)$")
 BACKED_UP = re.compile(r"^backed up (\d+) file\(s\) \((\d+) bytes\): (.+?) \.\. (.+)$")
 MONTH = re.compile(r"^\d{4}-\d\d$")
+SHOT = re.compile(r"^\d{4}-\d\d-\d\d \d{6}\.png$")   # "YYYY-MM-DD HHMMSS.png"
 
 
 # -----------------------------------------------------------------------------
@@ -157,9 +158,10 @@ def parse_logs(log_dir):
 #   Purpose : Count files and bytes per month folder of the local backup.
 #   Input   : local_dir - the backup folder
 #   Output  : (months, incoming, latest) - months is a list of
-#             {"month", "files", "bytes"} newest first; incoming is the number
-#             of files waiting in incoming/; latest is the newest screenshot
-#             name, or None
+#             {"month", "files", "bytes"} newest first, counting only
+#             screenshots named for that month (not ._* or other strays);
+#             incoming is the number of files waiting in incoming/; latest is
+#             the newest screenshot name, or None
 # -----------------------------------------------------------------------------
 def archive_stats(local_dir):
     months, latest = [], None
@@ -173,7 +175,7 @@ def archive_stats(local_dir):
         files = nbytes = 0
         newest = None
         for f in os.scandir(entry.path):
-            if f.is_file() and f.name.endswith(".png"):
+            if f.is_file() and SHOT.match(f.name) and f.name.startswith(entry.name):
                 files += 1
                 nbytes += f.stat().st_size
                 newest = max(newest or f.name, f.name)
